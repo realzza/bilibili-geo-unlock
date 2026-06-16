@@ -98,10 +98,51 @@ requests). Try them, but prefer self-hosting:
 
 ## Self-hosting a proxy (recommended)
 
-You need a small server in an unblocked region (any cheap HK/TW VPS). It just
-reverse-proxies `api.bilibili.com` and adds CORS headers.
+You need something with an egress IP in an **unblocked region** (Hong Kong /
+Taiwan / mainland). It just reverse-proxies `api.bilibili.com` and adds CORS
+headers. The region of the IP decides what unblocks: **HK/TW covers most
+overseas-blocked 番剧/影视**; mainland-only titles need a mainland IP (no free
+option exists for that).
 
-### nginx (reliable, recommended)
+> ⚠️ A Cloudflare Worker / Deno Deploy / Vercel proxy does **not** work here:
+> you can't choose their egress region, so the request leaves from a global edge
+> PoP (not HK/CN) and Bilibili still returns -10403.
+
+### Free option — Alibaba Cloud Function Compute, Hong Kong (recommended)
+
+A serverless function in HK gives you a Hong Kong egress IP on a perpetual free
+tier (~1M calls/month — far more than you'll use). Nothing to keep running.
+The only cost is a credit card for signup verification (every cloud requires it).
+
+Uses [`proxy/server.js`](proxy/server.js) (zero dependencies, stdlib only):
+
+1. Sign up at **alibabacloud.com** (the international site; English console).
+2. Go to **Function Compute** → make sure the region selector (top bar) is
+   **China (Hong Kong)**.
+3. **Create Function** → **Web Function** → Runtime **Node.js** (20.x).
+4. Paste the contents of `proxy/server.js` as the code (filename `server.js`).
+   - **Startup command:** `node server.js`
+   - **Listen port:** `9000`  (the script reads `FC_SERVER_PORT`, default 9000)
+5. Under **Triggers / HTTP**, enable the HTTP trigger and set auth to
+   **anonymous** (`disable` auth) so the userscript can reach it. Allow `GET`,
+   `POST`, `OPTIONS`.
+6. Copy the function's public URL (looks like
+   `https://<name>-<id>.cn-hongkong.fcapp.run`). Open `…/healthz` in a browser —
+   it should print `bilibili-geo-unlock proxy: ok`.
+7. In the userscript's 🌏 settings, set **Server** to that URL. Refresh Bilibili.
+
+> Tip: test it end-to-end by opening `https://<your-fc-url>/x/web-interface/nav`
+> — you should get Bilibili JSON back, served from a Hong Kong IP.
+
+### Free option — Oracle Cloud "Always Free" VPS
+
+A real VPS, free forever (not a trial). Catch: you usually get a Tokyo/Singapore
+IP, which is still "overseas" to Bilibili and unblocks *less* than HK/TW. Only
+worth it if you can grab their **Hong Kong** region at signup. Run
+[`proxy/server.js`](proxy/server.js) with `node server.js` behind the nginx/TLS
+config below, or use the nginx-only setup directly.
+
+### nginx (any HK/TW VPS, reliable)
 See [`proxy/nginx.conf`](proxy/nginx.conf). In short:
 
 ```nginx
@@ -123,10 +164,6 @@ server {
 ```
 
 Then set the script's **Server** to `https://your.proxy.example.com`.
-
-> A Cloudflare Worker / Deno Deploy proxy is *not* reliable here: their egress
-> IPs are not guaranteed to be in an unblocked region, so Bilibili may still
-> return -10403. Use a VPS located in HK/TW/CN.
 
 ---
 
