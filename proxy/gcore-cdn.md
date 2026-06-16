@@ -31,29 +31,44 @@ sees the request coming from Gcore's Asia network instead of your US IP.
    No credit card is requested for the CDN free plan.
 2. In the Customer Portal, open **CDN**.
 
+## Step 1b — Get a free subdomain (you DON'T need to buy a domain)
+Gcore's "Create resource" form **requires a delivery domain**, and accessing the
+bare `cl-xxxx.gcdn.co` hostname directly is disabled by default (it needs a
+support request). So grab a free subdomain you can put a CNAME on:
+
+1. Sign up at **<https://freedns.afraid.org>** (free, email only).
+2. **Registry** → pick any shared domain (e.g. `mooo.com`, `chickenkiller.com`)
+   and choose a name, e.g. `bili-unlock.mooo.com`. (You'll create the actual
+   CNAME record in Step 2, once Gcore gives you its target.)
+
+> Use **FreeDNS (afraid.org)** specifically because it supports **CNAME**
+> records. DuckDNS only does A records and won't work (Gcore gives you a CNAME
+> target, not a fixed IP).
+
 ## Step 2 — Create a CDN resource pointing at Bilibili
-1. **CDN → Create CDN resource** (a.k.a. "Add CDN resource").
-2. **Origin / Origins group:** add a single origin
-   - Origin: `api.bilibili.com`
-   - Port / protocol: **HTTPS (443)**
-3. **Origin protocol / "Redirect to origin":** set to **HTTPS** (or "Match"),
-   so Gcore talks to Bilibili over TLS.
-4. **Custom domain (CNAME):** you can either
-   - **Use the default Gcore domain** you're given, e.g. `cl-abcd1234.gcdn.co`
-     — simplest, works over HTTPS out of the box via Gcore's wildcard cert. **No
-     domain of your own needed.** ← recommended.
-   - …or attach your own subdomain and issue a free Let's Encrypt cert (only if
-     you'd rather use a custom domain).
-5. Save / create the resource. Note the resource's hostname
-   (`cl-xxxxxxxx.gcdn.co`) — this is your **proxy URL**.
+1. **CDN → Create resource**.
+2. **Add domain:** enter your free subdomain, e.g. `bili-unlock.mooo.com`.
+   Choose **"Do not delegate"**. Leave **WAAP off** (it's a paid feature).
+3. **Origin → URL → Origin source:** `api.bilibili.com`
+4. **Host header override:** `api.bilibili.com`
+5. Click **Create**. Gcore shows a **CNAME target** like `cl-xxxxxxxx.gcdn.co`.
+6. Back in **afraid.org → Subdomains → add a record:**
+   - Type **CNAME**, subdomain `bili-unlock` (domain `mooo.com`),
+     destination = the `cl-xxxxxxxx.gcdn.co` value from step 5.
+7. **Origin protocol:** in the resource settings set origin pull to **HTTPS** so
+   Gcore talks to Bilibili over TLS.
+8. **Enable HTTPS:** **SSL certificates** → issue a free **Let's Encrypt**
+   certificate for `bili-unlock.mooo.com` (so the userscript can reach it over
+   `https://`). It issues once the CNAME from step 6 has propagated.
+
+Your **proxy URL** is now `https://bili-unlock.mooo.com`.
 
 ## Step 3 — Confirm the Host header is `api.bilibili.com`
-Bilibili rejects requests whose `Host` isn't its own domain.
+Bilibili rejects requests whose `Host` isn't its own domain. You set this as
+**Host header override** in Step 2; double-check it here.
 
 1. Open the resource → **HTTP headers → Host header**.
-2. It should already be **Custom Host header = `api.bilibili.com`** (Gcore
-   auto-fills this from the origin). If not, set it manually to
-   `api.bilibili.com`.
+2. It should be **Custom Host header = `api.bilibili.com`**. If not, set it.
 
 ## Step 4 — Disable caching (this is a live API, not static files)
 1. Resource → **Cache settings** (a.k.a. "Caching").
@@ -76,10 +91,10 @@ but its fallback path needs these):
    effect.
 
 ## Step 6 — Verify the egress region (the decisive test)
-Open this in your browser (replace with your gcdn.co host):
+Open this in your browser (use your subdomain):
 
 ```
-https://cl-xxxxxxxx.gcdn.co/x/web-interface/zone
+https://bili-unlock.mooo.com/x/web-interface/zone
 ```
 
 Bilibili replies with the region **it thinks the request came from**. Look at
@@ -92,12 +107,12 @@ Bilibili replies with the region **it thinks the request came from**. Look at
 
 Also sanity-check the proxy itself:
 ```
-https://cl-xxxxxxxx.gcdn.co/x/web-interface/nav   # should return Bilibili JSON
+https://bili-unlock.mooo.com/x/web-interface/nav   # should return Bilibili JSON
 ```
 
 ## Step 7 — Point the userscript at it
 1. On any Bilibili page, click the 🌏 button (bottom-right) → set **Server** to
-   `https://cl-xxxxxxxx.gcdn.co` (no trailing path).
+   `https://bili-unlock.mooo.com` (your subdomain, no trailing path).
 2. Refresh a region-locked title and play.
 
 ---
