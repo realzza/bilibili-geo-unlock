@@ -108,11 +108,24 @@ option exists for that).
 > you can't choose their egress region, so the request leaves from a global edge
 > PoP (not HK/CN) and Bilibili still returns -10403.
 
-### Free option — Alibaba Cloud Function Compute, Hong Kong (recommended)
+### Free option, NO credit card — Gcore CDN (recommended) → [full guide](proxy/gcore-cdn.md)
+
+Sign up with just an **email** (no payment method) and put Gcore's free CDN
+(1 TB/mo) in front of `api.bilibili.com`. Bilibili then sees Gcore's Asia
+network instead of your US IP. The free-plan speed throttle is irrelevant — we
+only proxy tiny JSON, not the video stream. **Nothing to run or keep alive.**
+
+The catch is egress region: it works only if Gcore pulls origin via an Asia node
+(usually yes on free; guaranteed only with paid "Origin Shielding → Hong Kong").
+The [guide](proxy/gcore-cdn.md) includes a 10-second test
+(`/x/web-interface/zone`) that tells you definitively whether your free setup
+egresses in-region. **Start here.**
+
+### Free option (needs a credit card) — Alibaba Cloud Function Compute, Hong Kong
 
 A serverless function in HK gives you a Hong Kong egress IP on a perpetual free
 tier (~1M calls/month — far more than you'll use). Nothing to keep running.
-The only cost is a credit card for signup verification (every cloud requires it).
+Usage is $0, but signup needs a credit card for verification (every cloud does).
 
 Uses [`proxy/server.js`](proxy/server.js) (zero dependencies, stdlib only):
 
