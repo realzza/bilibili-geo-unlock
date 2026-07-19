@@ -1,0 +1,8 @@
+{
+  "name": "bilibili-geo-unlock",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check bilibili-geo-unlock.user.js && node --check proxy/server.js && node --check proxy/policy.js"
+  }
+}

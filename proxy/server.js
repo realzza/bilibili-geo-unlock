@@ -1,83 +1,128 @@
 #!/usr/bin/env node
 'use strict';
+
 /*
  * Bilibili geo-unlock reverse proxy.
- * ----------------------------------
- * Reverse-proxies api.bilibili.com and adds the CORS headers the userscript
- * needs. Deploy it in an UNBLOCKED region (Hong Kong) so its egress IP is what
- * hits Bilibili. No dependencies — just Node's stdlib.
  *
- * Runs anywhere:
- *   - Alibaba Cloud Function Compute "Web Function" (startup cmd: `node server.js`,
- *     listen port 9000)  ← recommended free option, see README
- *   - Any VPS (Oracle Always Free, etc.):  `node server.js`  (then put nginx/TLS
- *     in front, or run on 443 directly)
- *   - Local testing:  `node server.js` then curl http://localhost:9000/healthz
+ * This deliberately proxies only the small PGC metadata/playurl endpoints used
+ * by the browser companion. It is not a general-purpose proxy, it does not
+ * cache responses, and it never forwards browser cookies to Bilibili.
  *
- * Set the userscript's "Server" to this deployment's https URL.
+ * Deploy it only on infrastructure you control in a region where you are
+ * entitled to access the requested title. Premium entitlement still needs to
+ * be handled by Bilibili (for example, through a user-supplied access key when
+ * the relevant endpoint accepts it); this service does not bypass it.
  */
 const http = require('http');
 const https = require('https');
+const { isAllowedMethod, isAllowedPath } = require('./policy');
 
-const UPSTREAM = 'api.bilibili.com';
-const ALLOW_ORIGIN = 'https://www.bilibili.com';
-// FC injects FC_SERVER_PORT (default 9000); PORT works for generic hosts.
-const PORT = process.env.FC_SERVER_PORT || process.env.PORT || 9000;
+const DEFAULT_UPSTREAM = 'https://api.bilibili.com';
+const DEFAULT_ALLOW_ORIGIN = 'https://www.bilibili.com';
 
-const CORS = {
-    'Access-Control-Allow-Origin': ALLOW_ORIGIN,
-    'Access-Control-Allow-Credentials': 'true',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': '*',
-};
-
-const server = http.createServer((req, res) => {
-    // CORS preflight from www.bilibili.com
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204, CORS);
-        res.end();
-        return;
-    }
-
-    // health check / sanity ping
-    if (req.url === '/' || req.url === '/healthz') {
-        res.writeHead(200, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, CORS));
-        res.end('bilibili-geo-unlock proxy: ok');
-        return;
-    }
-
-    const headers = {
-        Host: UPSTREAM,
-        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
-        Referer: 'https://www.bilibili.com',
-        Origin: 'https://www.bilibili.com',
-        Accept: 'application/json, text/plain, */*',
+function corsHeaders(allowOrigin) {
+    return {
+        'Access-Control-Allow-Origin': allowOrigin,
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'content-type',
+        'Access-Control-Max-Age': '86400',
+        'Cache-Control': 'no-store',
+        'Vary': 'Origin',
     };
-    // Forward credentials if the caller supplied any. (Note: the userscript's
-    // cross-origin call cannot read HttpOnly SESSDATA, so 大会员-only titles
-    // generally rely on an access_key passed in the query string instead.)
-    if (req.headers['cookie']) headers.Cookie = req.headers['cookie'];
+}
 
-    const up = https.request(
-        { hostname: UPSTREAM, port: 443, path: req.url, method: req.method, headers },
-        (upRes) => {
-            const out = Object.assign(
-                { 'Content-Type': upRes.headers['content-type'] || 'application/json; charset=utf-8' },
-                CORS
-            );
-            res.writeHead(upRes.statusCode || 200, out);
-            upRes.pipe(res);
+function json(res, status, body, headers = {}) {
+    res.writeHead(status, Object.assign({
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+    }, headers));
+    res.end(JSON.stringify(body));
+}
+
+function createProxyServer({
+    upstreamOrigin = process.env.BILI_UPSTREAM_ORIGIN || DEFAULT_UPSTREAM,
+    allowOrigin = process.env.BILI_ALLOW_ORIGIN || DEFAULT_ALLOW_ORIGIN,
+} = {}) {
+    const upstream = new URL(upstreamOrigin);
+    if (!['http:', 'https:'].includes(upstream.protocol)) {
+        throw new Error('BILI_UPSTREAM_ORIGIN must use http or https');
+    }
+    const transport = upstream.protocol === 'https:' ? https : http;
+    const cors = corsHeaders(allowOrigin);
+
+    return http.createServer((req, res) => {
+        const requestUrl = new URL(req.url, 'http://proxy.invalid');
+
+        if (req.method === 'OPTIONS') {
+            if (!isAllowedPath(requestUrl.pathname)) {
+                json(res, 404, { code: -404, message: 'not found' }, cors);
+                return;
+            }
+            res.writeHead(204, cors);
+            res.end();
+            return;
         }
-    );
 
-    up.on('error', (e) => {
-        res.writeHead(502, Object.assign({ 'Content-Type': 'application/json' }, CORS));
-        res.end(JSON.stringify({ code: -1, message: 'proxy error: ' + e.message }));
+        if (req.method === 'GET' && (requestUrl.pathname === '/' || requestUrl.pathname === '/healthz')) {
+            res.writeHead(200, Object.assign({
+                'Content-Type': 'text/plain; charset=utf-8',
+            }, cors));
+            res.end('bilibili-geo-unlock proxy: ok');
+            return;
+        }
+
+        if (!isAllowedMethod(req.method)) {
+            json(res, 405, { code: -405, message: 'method not allowed' }, cors);
+            return;
+        }
+        if (!isAllowedPath(requestUrl.pathname)) {
+            json(res, 404, { code: -404, message: 'not found' }, cors);
+            return;
+        }
+
+        const upstreamRequest = transport.request({
+            protocol: upstream.protocol,
+            hostname: upstream.hostname,
+            port: upstream.port || undefined,
+            method: 'GET',
+            path: requestUrl.pathname + requestUrl.search,
+            headers: {
+                Host: upstream.host,
+                'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
+                Referer: 'https://www.bilibili.com/',
+                Origin: 'https://www.bilibili.com',
+                Accept: 'application/json, text/plain, */*',
+                // Do not send cookies scoped to this proxy host upstream. The
+                // browser cannot safely relay Bilibili's HttpOnly cookies here.
+                Cookie: '',
+            },
+        }, (upstreamResponse) => {
+            res.writeHead(upstreamResponse.statusCode || 502, Object.assign({
+                'Content-Type': upstreamResponse.headers['content-type'] || 'application/json; charset=utf-8',
+            }, cors));
+            upstreamResponse.pipe(res);
+        });
+
+        upstreamRequest.setTimeout(15_000, () => {
+            upstreamRequest.destroy(new Error('upstream timeout'));
+        });
+        upstreamRequest.on('error', (error) => {
+            if (!res.headersSent) {
+                json(res, 502, { code: -1, message: `proxy error: ${error.message}` }, cors);
+            } else {
+                res.destroy(error);
+            }
+        });
+        upstreamRequest.end();
     });
+}
 
-    req.pipe(up);
-});
+if (require.main === module) {
+    const port = Number(process.env.FC_SERVER_PORT || process.env.PORT || 9000);
+    const server = createProxyServer();
+    server.listen(port, () => {
+        console.log(`bilibili-geo-unlock proxy listening on :${port}`);
+    });
+}
 
-server.listen(PORT, () => {
-    console.log(`bilibili-geo-unlock proxy listening on :${PORT} -> https://${UPSTREAM}`);
-});
+module.exports = { createProxyServer };
